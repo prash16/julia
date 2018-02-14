@@ -50,14 +50,6 @@ end
 RefValue(x::T) where {T} = RefValue{T}(x)
 isassigned(x::RefValue) = isdefined(x, :x)
 
-Ref(x::Any) = RefValue(x)
-Ref{T}() where {T} = RefValue{T}() # Ref{T}()
-Ref{T}(x) where {T} = RefValue{T}(x) # Ref{T}(x)
-convert(::Type{Ref{T}}, x) where {T} = RefValue{T}(x)
-
-Ref(x::Ref, i::Integer) = (i != 1 && error("Ref only has one element"); x)
-Ref(x::Ptr{T}, i::Integer) where {T} = x + (i - 1) * Core.sizeof(T)
-
 function unsafe_convert(P::Type{Ptr{T}}, b::RefValue{T}) where T
     if datatype_pointerfree(RefValue{T})
         p = pointer_from_objref(b)
@@ -87,7 +79,6 @@ end
 RefArray(x::AbstractArray{T}, i::Int, roots::Any) where {T} = RefArray{T,typeof(x),Any}(x, i, roots)
 RefArray(x::AbstractArray{T}, i::Int=1, roots::Nothing=nothing) where {T} = RefArray{T,typeof(x),Nothing}(x, i, nothing)
 convert(::Type{Ref{T}}, x::AbstractArray{T}) where {T} = RefArray(x, 1)
-Ref(x::AbstractArray, i::Integer) = RefArray(x, i)
 
 function unsafe_convert(P::Type{Ptr{T}}, b::RefArray{T}) where T
     if datatype_pointerfree(RefValue{T})
@@ -104,6 +95,34 @@ function unsafe_convert(P::Type{Ptr{Any}}, b::RefArray{Any})
     return convert(P, pointer(b.x, b.i))
 end
 unsafe_convert(::Type{Ptr{Cvoid}}, b::RefArray{T}) where {T} = convert(Ptr{Cvoid}, unsafe_convert(Ptr{T}, b))
+
+cconvert(::Type{Ptr{P}}, a::Array{<:Ptr}) where {P<:Ptr} = a
+cconvert(::Type{Ref{P}}, a::Array{<:Ptr}) where {P<:Ptr} = a
+cconvert(::Type{Ptr{P}}, a::Array) where {P<:Union{Ptr,Cwstring,Cstring}} = Ref{P}(a)
+cconvert(::Type{Ref{P}}, a::Array) where {P<:Union{Ptr,Cwstring,Cstring}} = Ref{P}(a)
+
+###
+
+getindex(b::RefValue) = b.x
+getindex(b::RefArray) = b.x[b.i]
+
+setindex!(b::RefValue, x) = (b.x = x; b)
+setindex!(b::RefArray, x) = (b.x[b.i] = x; b)
+
+###
+
+# Base-only constructors on the shared abstract Ref type
+if nameof(@__MODULE__) === :Base
+
+Ref(x::Any) = RefValue(x)
+Ref{T}() where {T} = RefValue{T}() # Ref{T}()
+Ref{T}(x) where {T} = RefValue{T}(x) # Ref{T}(x)
+convert(::Type{Ref{T}}, x) where {T} = RefValue{T}(x)
+
+Ref(x::Ref, i::Integer) = (i != 1 && error("Ref only has one element"); x)
+Ref(x::Ptr{T}, i::Integer) where {T} = x + (i - 1) * Core.sizeof(T)
+
+Ref(x::AbstractArray, i::Integer) = RefArray(x, i)
 
 # convert Arrays to pointer arrays for ccall
 function Ref{P}(a::Array{<:Union{Ptr,Cwstring,Cstring}}) where P<:Union{Ptr,Cwstring,Cstring}
@@ -125,17 +144,5 @@ function Ref{P}(a::Array{T}) where P<:Union{Ptr,Cwstring,Cstring} where T
         return RefArray(ptrs,1,roots)
     end
 end
-cconvert(::Type{Ptr{P}}, a::Array{<:Ptr}) where {P<:Ptr} = a
-cconvert(::Type{Ref{P}}, a::Array{<:Ptr}) where {P<:Ptr} = a
-cconvert(::Type{Ptr{P}}, a::Array) where {P<:Union{Ptr,Cwstring,Cstring}} = Ref{P}(a)
-cconvert(::Type{Ref{P}}, a::Array) where {P<:Union{Ptr,Cwstring,Cstring}} = Ref{P}(a)
 
-###
-
-getindex(b::RefValue) = b.x
-getindex(b::RefArray) = b.x[b.i]
-
-setindex!(b::RefValue, x) = (b.x = x; b)
-setindex!(b::RefArray, x) = (b.x[b.i] = x; b)
-
-###
+end
