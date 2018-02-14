@@ -125,6 +125,7 @@ include("number.jl")
 include("int.jl")
 include("operators.jl")
 include("pointer.jl")
+include("refvalue.jl")
 include("refpointer.jl")
 include("checked.jl")
 using .Checked
