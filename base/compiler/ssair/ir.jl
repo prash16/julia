@@ -54,14 +54,14 @@ block_for_inst(cfg::CFG, inst) = block_for_inst(cfg.index, inst)
 
 function compute_basic_blocks(stmts::Vector{Any})
     jump_dests = IdSet{Int}(1)
-    terminators = Vector{Int}()
     # First go through and compute jump destinations
     for (idx, stmt) in pairs(stmts)
         # Terminators
         if isa(stmt, Union{GotoIfNot, GotoNode, ReturnNode})
-            push!(terminators, idx)
-            isa(stmt, ReturnNode) && continue
-            if isa(stmt, GotoIfNot)
+            if isa(stmt, ReturnNode)
+                # This is a fake dest to force the next stmt to start a bb
+                idx < length(stmts) && push!(jump_dests, idx+1)
+            elseif isa(stmt, GotoIfNot)
                 push!(jump_dests, idx+1)
                 push!(jump_dests, stmt.dest)
             else
