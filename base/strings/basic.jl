@@ -40,6 +40,8 @@ See also: [`codeunit`](@ref), [`ncodeunits`](@ref), [`thisind`](@ref),
 """
 AbstractString
 
+include("strings/iteration.jl")
+
 ## required string functions ##
 
 """
@@ -121,6 +123,7 @@ Stacktrace:
 @propagate_inbounds isvalid(s::AbstractString, i::Integer) = typeof(i) === Int ?
     throw(MethodError(isvalid, (s, i))) : isvalid(s, Int(i))
 
+#=
 """
     next(s::AbstractString, i::Integer) -> Tuple{Char, Int}
 
@@ -135,37 +138,7 @@ See also: [`getindex`](@ref), [`start`](@ref), [`done`](@ref),
 """
 @propagate_inbounds next(s::AbstractString, i::Integer) = typeof(i) === Int ?
     throw(MethodError(next, (s, i))) : next(s, Int(i))
-
-## basic generic definitions ##
-
-start(s::AbstractString) = 1
-done(s::AbstractString, i::Integer) = i > ncodeunits(s)
-eltype(::Type{<:AbstractString}) = Char
-sizeof(s::AbstractString) = ncodeunits(s) * sizeof(codeunit(s))
-firstindex(s::AbstractString) = 1
-lastindex(s::AbstractString) = thisind(s, ncodeunits(s))
-
-function getindex(s::AbstractString, i::Integer)
-    @boundscheck checkbounds(s, i)
-    @inbounds return isvalid(s, i) ? next(s, i)[1] : string_index_err(s, i)
-end
-
-getindex(s::AbstractString, i::Colon) = s
-# TODO: handle other ranges with stride ±1 specially?
-# TODO: add more @propagate_inbounds annotations?
-getindex(s::AbstractString, v::AbstractVector{<:Integer}) =
-    sprint(io->(for i in v; write(io, s[i]) end), sizehint=length(v))
-getindex(s::AbstractString, v::AbstractVector{Bool}) =
-    throw(ArgumentError("logical indexing not supported for strings"))
-
-function get(s::AbstractString, i::Integer, default)
-# TODO: use ternary once @inbounds is expression-like
-    if checkbounds(Bool, s, i)
-        @inbounds return s[i]
-    else
-        return default
-    end
-end
+=#
 
 ## bounds checking ##
 
@@ -379,6 +352,7 @@ julia> thisind("αβγdef", 10)
 
 julia> thisind("αβγdef", 20)
 20
+```
 """
 thisind(s::AbstractString, i::Integer) = thisind(s, Int(i))
 
@@ -469,21 +443,6 @@ function nextind(s::AbstractString, i::Int, n::Int)
     end
     return i + n
 end
-
-## string index iteration type ##
-
-struct EachStringIndex{T<:AbstractString}
-    s::T
-end
-keys(s::AbstractString) = EachStringIndex(s)
-
-length(e::EachStringIndex) = length(e.s)
-first(::EachStringIndex) = 1
-last(e::EachStringIndex) = lastindex(e.s)
-start(e::EachStringIndex) = start(e.s)
-next(e::EachStringIndex, state) = (state, nextind(e.s, state))
-done(e::EachStringIndex, state) = done(e.s, state)
-eltype(::Type{<:EachStringIndex}) = Int
 
 """
     isascii(c::Union{Char,AbstractString}) -> Bool

@@ -247,6 +247,39 @@ setindex!(v::Pairs, value, key) = (v.data[key] = value; v)
 get(v::Pairs, key, default) = get(v.data, key, default)
 get(f::Base.Callable, collection::Pairs, key) = get(f, v.data, key)
 
+"""
+    Iterators.LeadIndPairs(values, keys=eachindex(values))
+
+
+Like `Pairs`, but rather than returning the index corresponding to the current element,
+return the index corresponding to the next value. In other words, the index leads the
+value by one element. The index corresponding to the last element will be `lastindex(keys)+1`.
+"""
+struct LeadIndPairs{K, V, I, A}
+    data::A
+    itr::I
+    LeadIndPairs(data::A, itr::I) where {A, I} = new{eltype(I), eltype(A), I, A}(data, itr)
+end
+LeadIndPairs(data) = LeadIndPairs(data, eachindex(data))
+
+start(lip::LeadIndPairs) = start(lip.itr)
+done(lip::LeadIndPairs, state) = done(lip.itr, state)
+function next(lip::LeadIndPairs, state)
+    nidx = ns = next(lip.itr, state)
+    # A bit awkward now, done for consistency with the new iteration protocol
+    done(lip.itr, ns) && (nidx = lastindex(lip.itr)+1)
+    Pair(nidx, lip.data[ns]), ns
+end
+
+leadindpairs(data) = LeadIndPairs(data)
+leadindpairs(data, idx) = Rest(LeadIndPairs(data), idx)
+
+length(lip::LeadIndPairs) = length(lip.itr)
+eltype(::Type{LeadIndPairs{K, V}}) where {K, V} = Pair{K, V}
+
+IteratorSize(::Type{LeadIndPairs{<:Any, <:Any, I}}) where {I} = IteratorSize(I)
+IteratorEltype(::Type{LeadIndPairs{<:Any, <:Any, I}}) where {I} = IteratorEltype(I)
+
 # zip
 
 abstract type AbstractZipIterator end
@@ -1070,6 +1103,7 @@ end
 function fixpoint_iter_type(itrT::Type, valT::Type, stateT::Type)
     nextvalstate = Base._return_type(next, Tuple{itrT, stateT})
     nextvalstate <: Tuple{Any, Any} || return Any
+    nextvalstate === Union{} && return Union{}
     nextvalstate = Tuple{
         typejoin(valT, fieldtype(nextvalstate, 1)),
         typejoin(stateT, fieldtype(nextvalstate, 2))}
