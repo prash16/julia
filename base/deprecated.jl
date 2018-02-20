@@ -1399,6 +1399,9 @@ end
            link_pipe!(pipe, reader_supports_async = julia_only_read, writer_supports_async = julia_only_write),
            false)
 
+# issue #25965
+@deprecate spawn(cmds::AbstractCmd) run(cmds, wait = false)
+
 # Remember to delete the module when removing this
 @eval Base.Math module JuliaLibm
     Base.@deprecate log Base.log

@@ -45,7 +45,7 @@ end
 
 @test read(`$echocmd hello \| sort`, String) == "hello | sort\n"
 @test read(pipeline(`$echocmd hello`, sortcmd), String) == "hello\n"
-@test length(spawn(pipeline(`$echocmd hello`, sortcmd)).processes) == 2
+@test length(run(pipeline(`$echocmd hello`, sortcmd), wait=false).processes) == 2
 
 out = read(`$echocmd hello` & `$echocmd world`, String)
 @test contains(out,"world")
@@ -60,7 +60,7 @@ Sys.isunix() && run(pipeline(yescmd, `head`, DevNull))
 let a, p
     a = Base.Condition()
     @schedule begin
-        p = spawn(pipeline(yescmd,DevNull))
+        p = run(pipeline(yescmd,DevNull), wait=false)
         Base.notify(a,p)
         @test !success(p)
     end
@@ -166,7 +166,7 @@ let r, t
         try
             wait(r)
         end
-        p = spawn(`$sleepcmd 1`); wait(p)
+        p = run(`$sleepcmd 1`, wait=false); wait(p)
         @test p.exitcode == 0
         return true
     end
@@ -217,21 +217,21 @@ if valgrind_off
     # valgrind banner here, not "Hello World\n".
     @test read(pipeline(`$exename --startup-file=no -e 'println(STDERR,"Hello World")'`, stderr=catcmd), String) == "Hello World\n"
     out = Pipe()
-    proc = spawn(pipeline(`$exename --startup-file=no -e 'println(STDERR,"Hello World")'`, stderr = out))
+    proc = run(pipeline(`$exename --startup-file=no -e 'println(STDERR,"Hello World")'`, stderr = out), wait=false)
     close(out.in)
     @test read(out, String) == "Hello World\n"
     @test success(proc)
 end
 
 # setup_stdio for AbstractPipe
-let out = Pipe(), proc = spawn(pipeline(`$echocmd "Hello World"`, stdout=IOContext(out,STDOUT)))
+let out = Pipe(), proc = run(pipeline(`$echocmd "Hello World"`, stdout=IOContext(out,STDOUT)), wait=false)
     close(out.in)
     @test read(out, String) == "Hello World\n"
     @test success(proc)
 end
 
 # issue #5904
-@test run(pipeline(ignorestatus(falsecmd), truecmd)) === nothing
+@test run(pipeline(ignorestatus(falsecmd), truecmd)) isa Base.AbstractPipe
 
 @testset "redirect_*" begin
     let OLD_STDOUT = STDOUT,
@@ -445,11 +445,6 @@ end
 @test_throws ArgumentError run(Base.AndCmds(``, `$truecmd`))
 @test_throws ArgumentError run(Base.AndCmds(`$truecmd`, ``))
 
-@test_throws ArgumentError spawn(Base.Cmd(``))
-@test_throws ArgumentError spawn(Base.AndCmds(``, ``))
-@test_throws ArgumentError spawn(Base.AndCmds(``, `$echocmd test`))
-@test_throws ArgumentError spawn(Base.AndCmds(`$echocmd test`, ``))
-
 # tests for reducing over collection of Cmd
 @test_throws ArgumentError reduce(&, Base.AbstractCmd[])
 @test_throws ArgumentError reduce(&, Base.Cmd[])
@@ -507,7 +502,7 @@ end
 #let stdout = Pipe(), stdin = Pipe()
 #    Base.link_pipe!(stdout, reader_supports_async=true)
 #    Base.link_pipe!(stdin, writer_supports_async=true)
-#    p = spawn(pipeline(catcmd, stdin=stdin, stdout=stdout, stderr=DevNull))
+#    p = run(pipeline(catcmd, stdin=stdin, stdout=stdout, stderr=DevNull), wait=false)
 #    @async begin # feed cat with 2 MB of data (zeros)
 #        write(stdin, zeros(UInt8, 1048576 * 2))
 #        close(stdin)
@@ -519,7 +514,7 @@ end
 #end
 
 # `kill` error conditions
-let p = spawn(`$sleepcmd 100`)
+let p = run(`$sleepcmd 100`, wait=false)
     # Should throw on invalid signals
     @test_throws Base.UVError kill(p, typemax(Cint))
     kill(p)

@@ -12,7 +12,7 @@ end
 @testset "embedding example" begin
     stdout = Pipe()
     stderr = Pipe()
-    p = spawn(pipeline(Cmd(ARGS), stdin=DevNull, stdout=stdout, stderr=stderr))
+    p = run(pipeline(Cmd(ARGS), stdin=DevNull, stdout=stdout, stderr=stderr), wait=false)
     close(stdout.in)
     close(stderr.in)
     stdout_task = @async readlines(stdout)

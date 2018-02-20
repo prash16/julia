@@ -18,7 +18,7 @@ end
 function readchomperrors(exename::Cmd)
     out = Base.PipeEndpoint()
     err = Base.PipeEndpoint()
-    p = spawn(exename, DevNull, out, err)
+    p = run(exename, DevNull, out, err, wait=false)
     o = @async(readchomp(out))
     e = @async(readchomp(err))
     return (success(p), fetch(o), fetch(e))
@@ -388,7 +388,7 @@ let exename = joinpath(Sys.BINDIR, Base.julia_exename()),
             "$sysname.nonexistent",
             )
         let stderr = Pipe(),
-            p = spawn(pipeline(`$exename --sysimage=$nonexist_image`, stderr=stderr))
+            p = run(pipeline(`$exename --sysimage=$nonexist_image`, stderr=stderr), wait=false)
             close(stderr.in)
             let s = read(stderr, String)
                 @test contains(s, "ERROR: could not load library \"$nonexist_image\"\n")
@@ -401,7 +401,7 @@ let exename = joinpath(Sys.BINDIR, Base.julia_exename()),
         end
     end
     let stderr = Pipe(),
-        p = spawn(pipeline(`$exename --sysimage=$libjulia`, stderr=stderr))
+        p = run(pipeline(`$exename --sysimage=$libjulia`, stderr=stderr), wait=false)
         close(stderr.in)
         let s = read(stderr, String)
             @test s == "ERROR: System image file failed consistency check: maybe opened the wrong version?\n"
