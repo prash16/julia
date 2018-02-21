@@ -121,6 +121,7 @@ include("compiler/typeinfer.jl")
 include("compiler/optimize.jl") # TODO: break this up further + extract utilities
 
 include("compiler/bootstrap.jl")
+ccall(:jl_set_typeinf_func, Cvoid, (Any,), typeinf_ext)
 
 end # baremodule Compiler
 ))

@@ -6,9 +6,9 @@ include("compiler/ssair/passes.jl")
 include("compiler/ssair/verify.jl")
 include("compiler/ssair/legacy.jl")
 
-function normalize(expr)
+function normalize(@nospecialize(expr))
     if isa(expr, Expr) && expr.head === :gotoifnot
-        return GotoIfNot{Any}(expr.args...)
+        return GotoIfNot(expr.args...)
     elseif isa(expr, Expr) && expr.head === :return
         return ReturnNode{Any}(expr.args...)
     elseif isa(expr, LabelNode)

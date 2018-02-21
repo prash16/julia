@@ -161,7 +161,7 @@ function type_lift_pass!(ir::IRCode)
                     end
                 end
                 ccall(:jl_, Cvoid, (Any,), val)
-                if isexpr(stmt, :isdefiend)
+                if isexpr(stmt, :isdefined)
                     ir.stmts[idx] = true
                 else
                     ir.stmts[idx] = nothing
@@ -175,7 +175,7 @@ function type_lift_pass!(ir::IRCode)
             end
             def = ir.stmts[stmt_id]
             if !isa(def, PhiNode)
-                if isexpr(stmt, :isdefiend)
+                if isexpr(stmt, :isdefined)
                     ir.stmts[idx] = true
                 else
                     ir.stmts[idx] = nothing
@@ -231,7 +231,7 @@ function type_lift_pass!(ir::IRCode)
                 end
             end
             ccall(:jl_, Cvoid, (Any,), lifted_undef[stmt_id])
-            if isexpr(stmt, :isdefiend)
+            if isexpr(stmt, :isdefined)
                 ir.stmts[idx] = lifted_undef[stmt_id]
             else
                 ir.stmts[idx] = Expr(:throw_undef_if_not, stmt.args[1], lifted_undef[stmt_id])

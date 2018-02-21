@@ -1,4 +1,4 @@
-function check_op(ir, domtree, op, use_bb, use_idx)
+function check_op(ir::IRCode, domtree::DomTree, @nospecialize(op), use_bb::Int, use_idx::Int)
     if isa(op, SSAValue)
         def_bb = block_for_inst(ir.cfg, op.id)
         if (def_bb == use_bb)

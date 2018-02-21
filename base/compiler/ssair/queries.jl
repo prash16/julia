@@ -1,9 +1,9 @@
-function stmt_effect_free(stmt, src, mod)
+function stmt_effect_free(@nospecialize(stmt), src::IRCode, mod::Module)
     isa(stmt, Union{PiNode, PhiNode}) && return true
     isa(stmt, Union{ReturnNode, PhiNode, GotoNode, GotoIfNot}) && return false
-    statement_effect_free(stmt, src, mod)
+    return statement_effect_free(stmt, src, mod)
 end
 
 function abstract_eval_ssavalue(s::SSAValue, src::IRCode)
-    src.types[s.id]
+    return src.types[s.id]
 end

@@ -1,4 +1,4 @@
-function ssaargmap(f, stmt)
+function ssaargmap(f, @nospecialize(stmt))
     urs = userefs(stmt)
     urs === () && return stmt
     for op in urs

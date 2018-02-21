@@ -5941,7 +5941,8 @@ static std::unique_ptr<Module> emit_function(
                     continue;
                 }
                 val = ctx.SAvalues.at(idx);
-            } else {
+            }
+            else {
                 val = emit_expr(ctx, value);
             }
             TerminatorInst *terminator = FromBB->getTerminator();
@@ -5962,52 +5963,68 @@ static std::unique_ptr<Module> emit_function(
                     }
                 }
                 assert(found);
-            } else {
+            }
+            else {
                 terminator->eraseFromParent();
                 ctx.builder.SetInsertPoint(FromBB);
             }
             if (!jl_is_uniontype(phiType)) {
                 if (val.typ == (jl_value_t*)jl_bottom_type) {
                     V = UndefValue::get(VN->getType());
-                } else if (VN->getType() == T_prjlvalue) {
+                }
+                else if (VN->getType() == T_prjlvalue) {
                     V = boxed(ctx, val);
-                } else if (VN->getType()->isPointerTy()) {
+                }
+                else if (VN->getType()->isPointerTy()) {
                     V = maybe_bitcast(ctx,
                             decay_derived(data_pointer(ctx, val)),
                             VN->getType());
-                } else {
+                }
+                else {
                     V = emit_unbox(ctx, VN->getType(), val, val.typ);
                 }
                 VN->addIncoming(V, ctx.builder.GetInsertBlock());
                 assert(!TindexN);
-            } else if (!TindexN) {
+            }
+            else if (!TindexN) {
                 VN->addIncoming(boxed(ctx, val), ctx.builder.GetInsertBlock());
-            } else {
+            }
+            else {
                 Value *RTindex = NULL;
-                if (jl_is_concrete_type(val.typ)) {
+                if (val.typ == (jl_value_t*)jl_bottom_type) {
+                    V = UndefValue::get(VN->getType());
+                    RTindex = UndefValue::get(T_int8);
+                }
+                else if (jl_is_concrete_type(val.typ)) {
                     size_t tindex = get_box_tindex((jl_datatype_t*)val.typ, phiType);
                     if (tindex == 0) {
                         V = boxed(ctx, val);
                         RTindex = ConstantInt::get(T_int8, 0x80);
-                    } else {
+                    }
+                    else {
                         V = ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
-                        if (!type_is_ghost(julia_type_to_llvm(val.typ)))
+                        if (PhiAlloca && !type_is_ghost(julia_type_to_llvm(val.typ)))
                             emit_unionmove(ctx, PhiAlloca, val, NULL, false, NULL);
                         RTindex = ConstantInt::get(T_int8, tindex);
                     }
-                } else {
+                }
+                else {
                     jl_cgval_t new_union = convert_julia_type(ctx, val, phiType);
                     if (!new_union.TIndex) {
                         V = new_union.Vboxed;
                         if (TindexN) {
-                            emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
+                            if (PhiAlloca) // basically, if !ghost union
+                                emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
                             RTindex = compute_tindex_unboxed(ctx, new_union, phiType);
                             RTindex = ctx.builder.CreateOr(RTindex, ConstantInt::get(T_int8, 0x80));
-                        } else if (!V) {
+                        }
+                        else if (!V) {
                             V = boxed(ctx, val);
                         }
-                    } else {
-                        emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
+                    }
+                    else {
+                        if (PhiAlloca) // basically, if !ghost union
+                            emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
                         V = new_union.Vboxed ? new_union.Vboxed : ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
                         RTindex = new_union.TIndex;
                     }

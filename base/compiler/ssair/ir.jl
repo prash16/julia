@@ -1,18 +1,19 @@
 Core.PhiNode() = PhiNode(Any[], Any[])
-isexpr(stmt, head) = isa(stmt, Expr) && stmt.head === head
+@inline isexpr(@nospecialize(stmt), head::Symbol) = isa(stmt, Expr) && stmt.head === head
 
 struct Argument
     n::Int
 end
 
-struct GotoIfNot{T}
-    cond::T
+struct GotoIfNot
+    cond
     dest::Int
+    GotoIfNot(@nospecialize(cond), dest::Int) = new(cond, dest)
 end
 
 struct ReturnNode{T}
     val::T
-    ReturnNode{T}(val::T) where {T} = new{T}(val)
+    ReturnNode{T}(@nospecialize(val)) where {T} = new{T}(val::T)
     ReturnNode{T}() where {T} = new{T}()
 end
 
@@ -161,9 +162,12 @@ end
 
 function getindex(x::UseRef)
     stmt = x.urs.stmt
-    if isa(stmt, Expr) && is_relevant_expr(stmt)
+    if isa(stmt, Expr) && stmt.head === :(=)
+        x.use == 1 || return OOBToken()
+        return stmt.args[2]
+    elseif isa(stmt, Expr) && is_relevant_expr(stmt)
         x.use > length(stmt.args) && return OOBToken()
-        stmt.args[x.use]
+        return stmt.args[x.use]
     elseif isa(stmt, GotoIfNot)
         x.use == 1 || return OOBToken()
         return stmt.cond
@@ -181,20 +185,23 @@ function getindex(x::UseRef)
 end
 
 function is_relevant_expr(e::Expr)
-    isexpr(e, :call) || isexpr(e, :invoke) ||
-    isexpr(e, :new) || isexpr(e, :gc_preserve_begin) || isexpr(e, :gc_preserve_end) ||
-    isexpr(e, :foreigncall) || isexpr(e, :isdefined) || isexpr(e, :undefcheck) ||
-    isexpr(e, :throw_undef_if_not)
+    return e.head in (:call, :invoke, :new, :(=), :(&),
+                      :gc_preserve_begin, :gc_preserve_end,
+                      :foreigncall, :isdefined, :copyast,
+                      :undefcheck, :throw_undef_if_not)
 end
 
 function setindex!(x::UseRef, @nospecialize(v))
     stmt = x.urs.stmt
-    if isa(stmt, Expr) && is_relevant_expr(stmt)
+    if isa(stmt, Expr) && stmt.head === :(=)
+        x.use == 1 || throw(BoundsError())
+        stmt.args[2] = v
+    elseif isa(stmt, Expr) && is_relevant_expr(stmt)
         x.use > length(stmt.args) && throw(BoundsError())
         stmt.args[x.use] = v
     elseif isa(stmt, GotoIfNot)
         x.use == 1 || throw(BoundsError())
-        x.urs.stmt = GotoIfNot{Any}(v, stmt.dest)
+        x.urs.stmt = GotoIfNot(v, stmt.dest)
     elseif isa(stmt, ReturnNode)
         x.use == 1 || throw(BoundsError())
         x.urs.stmt = typeof(stmt)(v)
@@ -206,8 +213,9 @@ function setindex!(x::UseRef, @nospecialize(v))
         isassigned(stmt.values, x.use) || throw(BoundsError())
         stmt.values[x.use] = v
     else
-        return OOBToken()
+        throw(BoundsError())
     end
+    return x
 end
 
 function userefs(@nospecialize(x))
@@ -233,7 +241,7 @@ function done(it::UseRefIterator, use)
     false
 end
 
-function scan_ssa_use!(used, stmt)
+function scan_ssa_use!(used::IdSet{Int64}, @nospecialize(stmt))
     if isa(stmt, SSAValue)
         push!(used, stmt.id)
     end
@@ -245,7 +253,7 @@ function scan_ssa_use!(used, stmt)
     end
 end
 
-function ssamap(f, stmt)
+function ssamap(f, @nospecialize(stmt))
     urs = userefs(stmt)
     urs === () && return stmt
     for op in urs
@@ -257,7 +265,7 @@ function ssamap(f, stmt)
     urs[]
 end
 
-function foreachssa(f, stmt)
+function foreachssa(f, @nospecialize(stmt))
     for op in userefs(stmt)
         val = op[]
         if isa(val, SSAValue)
@@ -266,7 +274,7 @@ function foreachssa(f, stmt)
     end
 end
 
-function insert_node!(ir::IRCode, pos, typ, val)
+function insert_node!(ir::IRCode, pos::Int, @nospecialize(typ), @nospecialize(val))
     push!(ir.new_nodes, (pos, typ, val))
     return SSAValue(length(ir.stmts) + length(ir.new_nodes))
 end
@@ -341,17 +349,20 @@ function getindex(view::TypesView, idx)
     end
 end
 
+# maybe use expr_type?
 function value_typ(ir::IRCode, value)
     isa(value, SSAValue) && return ir.types[value.id]
-    isa(value, GlobalRef) && return typeof(getfield(value.mod, value.name))
+    isa(value, GlobalRef) && return abstract_eval_global(value.mod, value.name)
     isa(value, Argument) && return ir.argtypes[value.n]
+    # TODO: isa QuoteNode, etc.
     return typeof(value)
 end
 
 function value_typ(ir::IncrementalCompact, value)
     isa(value, SSAValue) && return types(ir)[value.id]
-    isa(value, GlobalRef) && return typeof(getfield(value.mod, value.name))
+    isa(value, GlobalRef) && return abstract_eval_global(value.mod, value.name)
     isa(value, Argument) && return ir.ir.argtypes[value.n]
+    # TODO: isa QuoteNode, etc.
     return typeof(value)
 end
 

@@ -1,4 +1,11 @@
-function scan_entry!(result, idx, stmt)
+mutable struct SlotInfo
+    defs::Vector{Int}
+    uses::Vector{Int}
+    any_newvar::Bool
+end
+SlotInfo() = SlotInfo(Int[], Int[], false)
+
+function scan_entry!(result::Vector{SlotInfo}, idx::Int, @nospecialize(stmt))
     # NewVarNodes count as defs for the purpose
     # of liveness analysis (i.e. they kill use chains)
     if isa(stmt, NewvarNode)
@@ -23,14 +30,8 @@ function scan_entry!(result, idx, stmt)
     end
 end
 
-mutable struct SlotInfo
-    defs::Vector{Int}
-    uses::Vector{Int}
-    any_newvar::Bool
-end
-SlotInfo() = SlotInfo(Int[], Int[], false)
 
-function lift_defuse(cfg, defuse)
+function lift_defuse(cfg::CFG, defuse)
     map(defuse) do slot
         SlotInfo(
             Int[block_for_inst(cfg, x) for x in slot.defs],
@@ -41,7 +42,7 @@ function lift_defuse(cfg, defuse)
 end
 
 @inline slot_id(s) = isa(s, SlotNumber) ? (s::SlotNumber).id : (s::TypedSlot).id
-function scan_slot_def_use(nargs, ci)
+function scan_slot_def_use(nargs, ci::CodeInfo)
     nslots = length(ci.slotnames)
     result = SlotInfo[SlotInfo() for i = 1:nslots]
     # Set defs for arguments
@@ -71,7 +72,7 @@ function renumber_ssa!(@nospecialize(stmt), ssanums::Vector{Any}, new_ssa::Bool=
     return ssamap(val->renumber_ssa(val, ssanums, new_ssa, used_ssa), stmt)
 end
 
-function make_ssa!(ci, idx, slot, typ)
+function make_ssa!(ci::CodeInfo, idx, slot, @nospecialize(typ))
     (idx == 0) && return Argument(slot)
     stmt = ci.code[idx]
     @assert isexpr(stmt, :(=))
@@ -85,7 +86,7 @@ struct UndefToken
 end
 const undef_token = UndefToken()
 
-function new_to_regular(stmt)
+function new_to_regular(@nospecialize(stmt))
     if isa(stmt, NewSSAValue)
         return SSAValue(stmt.id)
     end
@@ -117,7 +118,7 @@ function fixup_slot!(ir::IRCode, ci::CodeInfo, idx::Int, slot::Int, @nospecializ
     end
 end
 
-function fixemup!(cond, rename, ir, ci, idx, @nospecialize(stmt))
+function fixemup!(cond, rename, ir::IRCode, ci::CodeInfo, idx, @nospecialize(stmt))
     if isa(stmt, Union{SlotNumber, TypedSlot}) && cond(stmt)
         return fixup_slot!(ir, ci, idx, slot_id(stmt), stmt, rename(stmt))
     end
@@ -134,6 +135,24 @@ function fixemup!(cond, rename, ir, ci, idx, @nospecialize(stmt))
             bb_idx = block_for_inst(ir.cfg, stmt.edges[i])
             from_bb_terminator = last(ir.cfg.blocks[bb_idx].stmts)
             stmt.values[i] = fixup_slot!(ir, ci, from_bb_terminator, slot_id(val), val, rename(val))
+        end
+        return stmt
+    end
+    if isexpr(stmt, :isdefined)
+        val = stmt.args[1]
+        if isa(val, Union{SlotNumber, TypedSlot})
+            slot = slot_id(val)
+            if (ci.slotflags[slot] & SLOT_USEDUNDEF) == 0
+                return true
+            else
+                ssa = rename(val)
+                if ssa === undef_token
+                    return false
+                elseif !isa(ssa, SSAValue) && !isa(ssa, NewSSAValue)
+                    return true
+                end
+            end
+            stmt.args[1] = ssa
         end
         return stmt
     end
@@ -154,14 +173,14 @@ function fixemup!(cond, rename, ir, ci, idx, @nospecialize(stmt))
     urs[]
 end
 
-function fixup_uses!(ir, ci, uses, slot, ssa)
+function fixup_uses!(ir::IRCode, ci::CodeInfo, uses, slot, @nospecialize(ssa))
     for use in uses
-        ci.code[use] = fixemup!(stmt->slot_id(stmt)==slot,stmt->ssa,ir,ci,use,ci.code[use])
+        ci.code[use] = fixemup!(stmt->slot_id(stmt)==slot, stmt->ssa, ir, ci, use, ci.code[use])
     end
 end
 
-function rename_uses!(ir, ci, idx, stmt, renames)
-    fixemup!(stmt->true,stmt->renames[slot_id(stmt)],ir,ci,idx,stmt)
+function rename_uses!(ir::IRCode, ci::CodeInfo, idx::Int, @nospecialize(stmt), renames::Vector{Any})
+    return fixemup!(stmt->true, stmt->renames[slot_id(stmt)], ir, ci, idx, stmt)
 end
 
 function strip_trailing_junk(code)
@@ -187,7 +206,7 @@ struct DelayedTyp
     phi::NewSSAValue
 end
 
-function typ_for_val(val, ir, ci)
+function typ_for_val(@nospecialize(val), ir::IRCode, ci::CodeInfo)
     isa(val, Expr) && return val.typ
     isa(val, GlobalRef) && return typeof(getfield(val.mod, val.name))
     isa(val, SSAValue) && return ci.ssavaluetypes[val.id+1]
@@ -197,7 +216,7 @@ function typ_for_val(val, ir, ci)
 end
 
 # Run iterated dominance frontier
-function idf(cfg, defuse, domtree, slot)
+function idf(cfg::CFG, defuse, domtree::DomTree, slot::Int)
     # This should be a priority queue, but TODO - sorted array for now
     defs = defuse[slot].defs
     pq = Tuple{Int, Int}[(defs[i], domtree.nodes[defs[i]].level) for i in 1:length(defs)]
@@ -370,7 +389,7 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
         elseif isa(stmt, GotoNode)
             code[idx] = GotoNode(block_for_inst(cfg, stmt.label))
         elseif isa(stmt, GotoIfNot)
-            code[idx] = GotoIfNot{Any}(stmt.cond, block_for_inst(cfg, stmt.dest))
+            code[idx] = GotoIfNot(stmt.cond, block_for_inst(cfg, stmt.dest))
         else
             code[idx] = stmt
         end
