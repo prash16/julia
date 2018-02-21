@@ -1972,7 +1972,6 @@ static void simple_use_analysis(jl_codectx_t &ctx, jl_value_t *expr)
     }
     else if (jl_is_expr(expr)) {
         jl_expr_t *e = (jl_expr_t*)expr;
-        size_t i;
         if (e->head == method_sym) {
             simple_use_analysis(ctx, jl_exprarg(e, 0));
             if (jl_expr_nargs(e) > 1) {
@@ -1985,10 +1984,22 @@ static void simple_use_analysis(jl_codectx_t &ctx, jl_value_t *expr)
             simple_use_analysis(ctx, jl_exprarg(e, 1));
         }
         else {
-            size_t elen = jl_array_dim0(e->args);
+            size_t i, elen = jl_array_dim0(e->args);
             for (i = 0; i < elen; i++) {
                 simple_use_analysis(ctx, jl_exprarg(e, i));
             }
+        }
+    }
+    else if (jl_is_pinode(expr)) {
+        simple_use_analysis(ctx, jl_fieldref_noalloc(expr, 0));
+    }
+    else if (jl_is_phinode(expr)) {
+        jl_array_t *values = (jl_array_t*)jl_fieldref_noalloc(expr, 1);
+        size_t i, elen = jl_array_len(values);
+        for (i = 0; i < elen; i++) {
+            jl_value_t *v = jl_array_ptr_ref(values, i);
+            if (v)
+                simple_use_analysis(ctx, v);
         }
     }
 }
@@ -3451,6 +3462,9 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
     jl_value_t *phiType = jl_array_ptr_ref(ssavalue_types, idx);
     BasicBlock *BB = ctx.builder.GetInsertBlock();
     auto InsertPt = BB->getFirstInsertionPt();
+    if (phiType == jl_bottom_type) {
+        return;
+    }
     if (jl_is_uniontype(phiType)) {
         bool allunbox;
         size_t min_align;
@@ -3473,7 +3487,8 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
             ctx.SAvalues.at(idx) = val;
             ctx.ssavalue_assigned.at(idx) = true;
             return;
-        } else if (allunbox) {
+        }
+        else if (allunbox) {
             PHINode *Tindex_phi = PHINode::Create(T_int8, jl_array_len(edges), "tindex_phi");
             BB->getInstList().insert(InsertPt, Tindex_phi);
             jl_cgval_t val = mark_julia_slot(NULL, phiType, Tindex_phi, tbaa_stack);
@@ -3506,7 +3521,8 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
         ctx.builder.CreateMemCpy(alloc, value_phi, jl_datatype_size(phiType),
             jl_datatype_align(phiType), false);
         slot = mark_julia_slot(alloc, phiType, NULL, tbaa_stack);
-    } else {
+    }
+    else {
         value_phi = PHINode::Create(vtype, jl_array_len(edges), "value_phi");
         BB->getInstList().insert(InsertPt, value_phi);
         slot = mark_julia_type(ctx, value_phi, isboxed, phiType);
@@ -5931,9 +5947,23 @@ static std::unique_ptr<Module> emit_function(
                 ssize_t idx = value ? ((jl_ssavalue_t*)value)->id : 0;
                 if (!value || !ctx.ssavalue_assigned.at(idx)) {
                     if (VN) {
-                        Value *undef = VN->getType() == T_prjlvalue ?
-                            (llvm::Value*)ConstantPointerNull::get(cast<PointerType>(T_prjlvalue)) :
-                            (llvm::Value*)UndefValue::get(VN->getType());
+                        Value *undef;
+                        if (isa<PointerType>(VN->getType())) {
+                            bool isboxed;
+                            Type *lphity = julia_type_to_llvm(phiType, &isboxed);
+                            if (!isboxed) {
+                                // the emit_phinode_assign emitted a memcpy in this case,
+                                // so this needs to ensure the pointer is valid, while the contents are undef
+                                undef = decay_derived(emit_static_alloca(ctx, lphity));
+                            }
+                            else {
+                                // but make sure gc pointers are NULL
+                                undef = ConstantPointerNull::get(cast<PointerType>(VN->getType()));
+                            }
+                        }
+                        else {
+                            undef = UndefValue::get(VN->getType());
+                        }
                         VN->addIncoming(undef, FromBB);
                     }
                     if (TindexN)

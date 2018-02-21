@@ -59,14 +59,15 @@ function compute_basic_blocks(stmts::Vector{Any})
     for (idx, stmt) in pairs(stmts)
         # Terminators
         if isa(stmt, Union{GotoIfNot, GotoNode, ReturnNode})
-            if isa(stmt, ReturnNode)
-                # This is a fake dest to force the next stmt to start a bb
-                idx < length(stmts) && push!(jump_dests, idx+1)
-            elseif isa(stmt, GotoIfNot)
+            if isa(stmt, GotoIfNot)
                 push!(jump_dests, idx+1)
                 push!(jump_dests, stmt.dest)
             else
-                push!(jump_dests, stmt.label)
+                # This is a fake dest to force the next stmt to start a bb
+                idx < length(stmts) && push!(jump_dests, idx+1)
+                if isa(stmt, GotoNode)
+                    push!(jump_dests, stmt.label)
+                end
             end
         end
     end
@@ -163,8 +164,13 @@ end
 function getindex(x::UseRef)
     stmt = x.urs.stmt
     if isa(stmt, Expr) && stmt.head === :(=)
+        rhs = stmt.args[2]
+        if isa(rhs, Expr) && is_relevant_expr(rhs)
+            x.use > length(rhs.args) && return OOBToken()
+            return rhs.args[x.use]
+        end
         x.use == 1 || return OOBToken()
-        return stmt.args[2]
+        return rhs
     elseif isa(stmt, Expr) && is_relevant_expr(stmt)
         x.use > length(stmt.args) && return OOBToken()
         return stmt.args[x.use]
@@ -194,8 +200,14 @@ end
 function setindex!(x::UseRef, @nospecialize(v))
     stmt = x.urs.stmt
     if isa(stmt, Expr) && stmt.head === :(=)
-        x.use == 1 || throw(BoundsError())
-        stmt.args[2] = v
+        rhs = stmt.args[2]
+        if isa(rhs, Expr) && is_relevant_expr(rhs)
+            x.use > length(rhs.args) && throw(BoundsError())
+            rhs.args[x.use] = v
+        else
+            x.use == 1 || throw(BoundsError())
+            stmt.args[2] = v
+        end
     elseif isa(stmt, Expr) && is_relevant_expr(stmt)
         x.use > length(stmt.args) && throw(BoundsError())
         stmt.args[x.use] = v
