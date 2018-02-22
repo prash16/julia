@@ -119,19 +119,25 @@ function first_insert_for_bb(code, cfg, block)
     end
 end
 
+
+const NewNode = Tuple{Int, Any, Any, LineNumberNode}
+
 struct IRCode
     stmts::Vector{Any}
     types::Vector{Any}
+    lines::Vector{LineNumberNode}
     argtypes::Vector{Any}
     cfg::CFG
-    new_nodes::Vector{Tuple{Int, Any, Any}}
+    new_nodes::Vector{NewNode}
     mod::Module
     meta::Vector{Any}
 
-    IRCode(stmts::Vector{Any}, cfg::CFG, argtypes::Vector{Any}, mod::Module, meta::Vector{Any}) =
-        new(stmts, Any[], argtypes, cfg, Tuple{Int, Any, Any}[], mod, meta)
-    IRCode(ir::IRCode, stmts::Vector{Any}, types::Vector{Any}, cfg::CFG, new_nodes::Vector{Tuple{Int, Any, Any}}) =
-        new(stmts, types, ir.argtypes, cfg, new_nodes, ir.mod, ir.meta)
+    function IRCode(stmts::Vector{Any}, lines::Vector{LineNumberNode}, cfg::CFG, argtypes::Vector{Any}, mod::Module, meta::Vector{Any})
+        return new(stmts, Any[], lines, argtypes, cfg, NewNode[], mod, meta)
+    end
+    function IRCode(ir::IRCode, stmts::Vector{Any}, types::Vector{Any}, lines::Vector{LineNumberNode}, cfg::CFG, new_nodes::Vector{NewNode})
+        return new(stmts, types, lines, ir.argtypes, cfg, new_nodes, ir.mod, ir.meta)
+    end
 end
 
 function getindex(x::IRCode, s::SSAValue)
@@ -292,7 +298,8 @@ function foreachssa(f, @nospecialize(stmt))
 end
 
 function insert_node!(ir::IRCode, pos::Int, @nospecialize(typ), @nospecialize(val))
-    push!(ir.new_nodes, (pos, typ, val))
+    line = ir.lines[pos]
+    push!(ir.new_nodes, (pos, typ, val, line))
     return SSAValue(length(ir.stmts) + length(ir.new_nodes))
 end
 
@@ -310,6 +317,7 @@ mutable struct IncrementalCompact
     ir::IRCode
     result::Vector{Any}
     result_types::Vector{Any}
+    result_lines::Vector{LineNumberNode}
     ssa_rename::Vector{Any}
     used_ssas::Vector{Int}
     late_fixup::Vector{Int}
@@ -320,12 +328,14 @@ mutable struct IncrementalCompact
     result_idx::Int
     function IncrementalCompact(code::IRCode)
         perm = my_sortperm(Int[code.new_nodes[i][1] for i in 1:length(code.new_nodes)])
-        result = Array{Any}(uninitialized, length(code.stmts) + length(code.new_nodes))
-        result_types = Array{Any}(uninitialized, length(code.stmts) + length(code.new_nodes))
-        ssa_rename = Any[SSAValue(i) for i = 1:(length(code.stmts) + length(code.new_nodes))]
+        new_len = length(code.stmts) + length(code.new_nodes)
+        result = Array{Any}(uninitialized, new_len)
+        result_types = Array{Any}(uninitialized, new_len)
+        result_lines = Array{LineNumberNode}(uninitialized, new_len)
+        ssa_rename = Any[SSAValue(i) for i = 1:new_len]
+        used_ssas = fill(0, new_len)
         late_fixup = Vector{Int}()
-        used_ssas = fill(0, length(code.stmts) + length(code.new_nodes))
-        return new(code, result, result_types, ssa_rename, used_ssas, late_fixup, perm, 1, 1, 1)
+        return new(code, result, result_types, result_lines, ssa_rename, used_ssas, late_fixup, perm, 1, 1, 1)
     end
 end
 
@@ -436,14 +446,16 @@ function next(compact::IncrementalCompact, (idx, active_bb, old_result_idx)::Tup
     if length(compact.result) < old_result_idx
         resize!(compact.result, old_result_idx)
         resize!(compact.result_types, old_result_idx)
+        resize!(compact.result_lines, old_result_idx)
     end
     bb = compact.ir.cfg.blocks[active_bb]
     if compact.new_nodes_idx <= length(compact.perm) && compact.ir.new_nodes[compact.perm[compact.new_nodes_idx]][1] == idx
         new_idx = compact.perm[compact.new_nodes_idx]
         compact.new_nodes_idx += 1
-        _, typ, new_node = compact.ir.new_nodes[new_idx]
+        _, typ, new_node, new_line = compact.ir.new_nodes[new_idx]
         new_idx += length(compact.ir.stmts)
         compact.result_types[old_result_idx] = typ
+        compact.result_lines[old_result_idx] = new_line
         result_idx = process_node!(compact, old_result_idx, new_node, new_idx, idx)
         (old_result_idx == result_idx) && return next(compact, (idx, result_idx))
         compact.result_idx = result_idx
@@ -452,6 +464,7 @@ function next(compact::IncrementalCompact, (idx, active_bb, old_result_idx)::Tup
     # This will get overwritten in future iterations if
     # result_idx is not, incremented, but that's ok and expected
     compact.result_types[old_result_idx] = compact.ir.types[idx]
+    compact.result_lines[old_result_idx] = compact.ir.lines[idx]
     result_idx = process_node!(compact, old_result_idx, compact.ir.stmts[idx], idx, idx)
     if idx == last(bb.stmts)
         # If this was the last statement in the BB and we decided to skip it, insert a
@@ -518,6 +531,7 @@ function finish(compact::IncrementalCompact)
     result_idx = compact.result_idx
     resize!(compact.result, result_idx-1)
     resize!(compact.result_types, result_idx-1)
+    resize!(compact.result_lines, result_idx-1)
     bb = compact.ir.cfg.blocks[end]
     compact.ir.cfg.blocks[end] = BasicBlock(bb,
                 StmtRange(first(bb.stmts), result_idx-1))
@@ -532,7 +546,7 @@ function finish(compact::IncrementalCompact)
         maybe_erase_unused!(extra_worklist, compact, pop!(extra_worklist))
     end
     cfg = CFG(compact.ir.cfg.blocks, Int[first(bb.stmts) for bb in compact.ir.cfg.blocks[2:end]])
-    return IRCode(compact.ir, compact.result, compact.result_types, cfg, Tuple{Int, Any, Any}[])
+    return IRCode(compact.ir, compact.result, compact.result_types, compact.result_lines, cfg, NewNode[])
 end
 
 function compact!(code::IRCode)

@@ -269,6 +269,7 @@ function optimize(me::InferenceState)
 
     # run optimization passes on fulltree
     force_noinline = true
+    def = me.linfo.def
     if me.limited && me.cached && me.parent !== nothing
         # a top parent will be cached still, but not this intermediate work
         me.cached = false
@@ -284,14 +285,19 @@ function optimize(me::InferenceState)
         inlining_pass!(opt, opt.src.propagate_inbounds)
         any_enter = any(x->isa(x, Expr) && x.head == :enter, opt.src.code)
         any_phi = any(x->isa(x, PhiNode) || (isa(x, Expr) && x.head == :(=) && isa(x.args[2], PhiNode)), opt.src.code)
-        if !any_enter && !isa(opt.linfo.def, Module)
+        if !any_enter && isa(def, Method)
             reindex_labels!(opt)
-            nargs = Int(opt.linfo.def.nargs)-1
-            #ccall(:jl_, Cvoid, (Any, ), opt.linfo.specTypes)
-            ir = run_passes(opt.src, opt.mod, nargs)
-            replace_code!(opt.src, ir, nargs)
-            #comp = ccall(:jl_compress_ast, Any, (Any, Any), opt.linfo.def, opt.src)
-            #Core.println(opt.linfo.def.roots)
+            nargs = Int(opt.nargs) - 1
+            if def isa Method
+                #ccall(:jl_, Cvoid, (Any, ), opt.linfo.specTypes)
+                topline = LineNumberNode(Int(def.line), def.file)
+            else
+                topline = LineNumberNode(0)
+            end
+            ir = run_passes(opt.src, opt.mod, nargs, topline)
+            replace_code!(opt.src, ir, nargs, topline)
+            #comp = ccall(:jl_compress_ast, Any, (Any, Any), def, opt.src)
+            #Core.println(def.roots)
             #ccall(:jl_, Cvoid, (Any,), comp)
             #ccall(:jl_, Cvoid, (Any,), opt.src.code)
         elseif !any_phi
@@ -384,7 +390,6 @@ function optimize(me::InferenceState)
             force_noinline = true
         end
     end
-    def = me.linfo.def
     if force_noinline
         me.src.inlineable = false
     elseif !me.src.inlineable && isa(def, Method)

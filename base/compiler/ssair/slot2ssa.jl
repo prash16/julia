@@ -183,21 +183,22 @@ function rename_uses!(ir::IRCode, ci::CodeInfo, idx::Int, @nospecialize(stmt), r
     return fixemup!(stmt->true, stmt->renames[slot_id(stmt)], ir, ci, idx, stmt)
 end
 
-function strip_trailing_junk(code)
+function strip_trailing_junk!(code::Vector{Any}, lines::Vector{LineNumberNode})
     # Remove `nothing`s at the end, we don't handle them well
     # (we expect the last instruction to be a terminator)
     for i = length(code):-1:1
-        if code[i] !== nothing && !isexpr(code[i], :meta) &&
-            !isa(code[i], LineNumberNode) && !isexpr(code[i], :line)
+        if code[i] !== nothing
             resize!(code, i)
+            resize!(lines, i)
             break
         end
     end
     # If the last instruction is not a terminator, add one. This can
     # happen for implicit return on dead branches.
-    if !isexpr(code[end], :return) && !isexpr(code[end], :gotoifnot) && !isa(code, GotoNode) &&
-            !isa(code[end], ReturnNode) && !isa(code[end], GotoIfNot)
+    term = code[end]
+    if !isa(term, GotoIfNot) && !isa(term, GotoNode) && !isa(term, ReturnNode)
         push!(code, ReturnNode{Any}())
+        push!(lines, LineNumberNode(0))
     end
     return code
 end
@@ -334,12 +335,12 @@ function construct_ssa!(ci::CodeInfo, ir::IRCode, domtree::DomTree, defuse, narg
             end
             typ = incoming_val == undef_token ? MaybeUndef(Union{}) : typ_for_val(incoming_val, ci)
             new_node_id = ssaval - length(ir.stmts)
-            old_insert, old_typ, _ = ir.new_nodes[new_node_id]
+            old_insert, old_typ, _, old_line = ir.new_nodes[new_node_id]
             if isa(typ, DelayedTyp)
                 push!(type_refine_phi, ssaval)
             end
-            ir.new_nodes[new_node_id] = (old_insert,
-                isa(typ, DelayedTyp) ? Union{} : tmerge(old_typ, typ), node)
+            new_typ = isa(typ, DelayedTyp) ? Union{} : tmerge(old_typ, typ)
+            ir.new_nodes[new_node_id] = (old_insert, new_typ, node, old_line)
             incoming_vals[slot] = NewSSAValue(ssaval)
         end
         (item in visited) && continue
@@ -408,7 +409,7 @@ function construct_ssa!(ci::CodeInfo, ir::IRCode, domtree::DomTree, defuse, narg
         changed = false
         for phi in type_refine_phi
             new_idx = phi - length(ir.stmts)
-            old_insert, old_typ, node = ir.new_nodes[new_idx]
+            old_insert, old_typ, node, old_line = ir.new_nodes[new_idx]
             new_typ = Union{}
             for i = 1:length(node.values)
                 if !isassigned(node.values, i)
@@ -424,20 +425,20 @@ function construct_ssa!(ci::CodeInfo, ir::IRCode, domtree::DomTree, defuse, narg
                 new_typ = tmerge(new_typ, typ)
             end
             if !(old_typ ⊑ new_typ) || !(new_typ ⊑ old_typ)
-                ir.new_nodes[new_idx] = (old_insert, new_typ, node)
+                ir.new_nodes[new_idx] = (old_insert, new_typ, node, old_line)
                 changed = true
             end
         end
     end
     types = Any[isa(types[i], DelayedTyp) ? ir.new_nodes[types[i].phi.id - length(ir.stmts)][2] : types[i] for i in 1:length(types)]
-    new_nodes = Tuple{Int, Any, Any}[let (pos, typ, node) = ir.new_nodes[i]
+    new_nodes = NewNode[let (pos, typ, node, line) = ir.new_nodes[i]
             typ = isa(typ, DelayedTyp) ? ir.new_nodes[typ.phi.id - length(ir.stmts)][2] : typ
-            (pos, typ, node)
+            (pos, typ, node, line)
         end for i in 1:length(ir.new_nodes)]
     # Renumber SSA values
     code = Any[new_to_regular(renumber_ssa!(code[i], ssavalmap)) for i in 1:length(code)]
-    new_nodes = Tuple{Int, Any, Any}[let (pt, typ, stmt) = new_nodes[i]
-            (pt, typ, new_to_regular(renumber_ssa!(stmt, ssavalmap)))
+    new_nodes = NewNode[let (pt, typ, stmt, line) = new_nodes[i]
+            (pt, typ, new_to_regular(renumber_ssa!(stmt, ssavalmap)), line)
         end for i in 1:length(new_nodes)]
-    return IRCode(ir, code, types, ir.cfg, new_nodes)
+    return IRCode(ir, code, types, ir.lines, ir.cfg, new_nodes)
 end

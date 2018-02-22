@@ -254,10 +254,22 @@ function label_counter(body::Vector{Any})
             label = b.label::Int
         elseif isa(b, LabelNode)
             label = b.label
-        elseif isa(b, Expr) && b.head == :gotoifnot
-            label = b.args[2]::Int
-        elseif isa(b, Expr) && b.head == :enter
-            label = b.args[1]::Int
+        elseif isa(b, Expr)
+            if b.head == :gotoifnot
+                label = b.args[2]::Int
+            elseif b.head == :enter
+                label = b.args[1]::Int
+            elseif b.head === :(=)
+                rhs = b.args[2]
+                if isa(rhs, PhiNode)
+                    for edge in rhs.edges
+                        edge = edge::Int + 1
+                        if edge > l
+                            l = edge
+                        end
+                    end
+                end
+            end
         end
         if label > l
             l = label

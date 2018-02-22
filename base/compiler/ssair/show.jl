@@ -64,7 +64,7 @@ function Base.show(io::IO, code::IRCode)
     used = Set{Int}()
     println(io, "Code")
     foreach(stmt->scan_ssa_use!(used, stmt), code.stmts)
-    foreach(((_a,_b,node),)->scan_ssa_use!(used, node), code.new_nodes)
+    foreach(((_a, _b, node, _d),) -> scan_ssa_use!(used, node), code.new_nodes)
     if isempty(used)
         maxsize = 0
     else
@@ -78,7 +78,7 @@ function Base.show(io::IO, code::IRCode)
     new_nodes_perm = Iterators.Stateful(perm)
     for (idx, stmt) in Iterators.enumerate(code.stmts)
         bbrange = cfg.blocks[bb_idx].stmts
-	bbrange = bbrange.first:bbrange.last
+        bbrange = bbrange.first:bbrange.last
         bb_pad = max_bb_idx_size - length(string(bb_idx))
         if idx != last(bbrange)
             if idx == first(bbrange)
@@ -94,7 +94,7 @@ function Base.show(io::IO, code::IRCode)
         floop = true
         while !isempty(new_nodes_perm) && code.new_nodes[Base.peek(new_nodes_perm)][1] == idx
             node_idx = popfirst!(new_nodes_perm)
-            _, typ, node = code.new_nodes[node_idx]
+            _, typ, node, line = code.new_nodes[node_idx]
             node_idx += length(code.stmts)
             if print_sep
                 if floop

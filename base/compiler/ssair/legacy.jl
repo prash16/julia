@@ -10,8 +10,7 @@ function ssaargmap(f, @nospecialize(stmt))
     urs[]
 end
 
-function replace_code!(ci::CodeInfo, code::IRCode, nargs::Int)
-    cfg = compute_basic_blocks(code.stmts)
+function replace_code!(ci::CodeInfo, code::IRCode, nargs::Int, topline::LineNumberNode)
     if !isempty(code.new_nodes)
         code = compact!(code)
     end
@@ -46,9 +45,10 @@ function replace_code!(ci::CodeInfo, code::IRCode, nargs::Int)
             end
         end
     end
-    block_start = IdDict{Int, Int}(first(code.cfg.blocks[x].stmts)=>x for x in dest_blocks)
-    comefrom_labels = IdSet{Int}(last(code.cfg.blocks[x].stmts)+1 for x in jump_origins)
-    block_terminators = IdDict{Int, Int}(last(block.stmts)=>i for (i,block) in pairs(code.cfg.blocks))
+    cfg = code.cfg
+    block_start = IdDict{Int, Int}(first(cfg.blocks[x].stmts)=>x for x in dest_blocks)
+    comefrom_labels = IdSet{Int}(last(cfg.blocks[x].stmts)+1 for x in jump_origins)
+    block_terminators = IdDict{Int, Int}(last(block.stmts)=>i for (i,block) in pairs(cfg.blocks))
     local rename
     let mapping = mapping
         function rename(@nospecialize(val))
@@ -69,12 +69,20 @@ function replace_code!(ci::CodeInfo, code::IRCode, nargs::Int)
     terminator_mapping = IdDict{Int, Int}()
     fixup = Int[]
     for (idx, stmt) in pairs(code.stmts)
+        line = code.lines[idx]
+        # push labels first
         if haskey(block_start, idx)
             push!(new_code, LabelNode(length(new_code) + 1))
             label_mapping[block_start[idx]] = length(new_code)
         elseif idx in comefrom_labels
             push!(new_code, LabelNode(length(new_code) + 1))
         end
+        # then metadata
+        if !(line.file === nothing && line.line === 0) && !(line === topline)
+            push!(new_code, line)
+            topline = line
+        end
+        # record if this'll need a fixup after stmt number
         if isa(stmt, GotoIfNot)
             new_stmt = Expr(:gotoifnot, rename(stmt.cond), stmt.dest)
             push!(fixup, length(new_code)+1)
@@ -99,9 +107,11 @@ function replace_code!(ci::CodeInfo, code::IRCode, nargs::Int)
         if haskey(mapping, idx)
             new_stmt = Expr(:(=), SSAValue(mapping[idx]), new_stmt)
         end
+        # record fixup targets
         if haskey(block_terminators, idx)
             terminator_mapping[block_terminators[idx]] = length(new_code)+1
         end
+        # and finally, record the new new statement
         push!(new_code, new_stmt)
     end
     for i in fixup
