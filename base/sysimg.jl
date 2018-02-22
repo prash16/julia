@@ -516,6 +516,32 @@ let
             # No deps
             :Base64,
             :CRC32c,
+            :SHA,
+            :FileWatching,
+            :Unicode,
+            :Mmap,
+            :Serialization,
+            :Libdl,
+            :Markdown,
+            :LibGit2,
+            :Logging,
+
+            :Printf,
+            :Profile,
+            :Dates,
+            :DelimitedFiles,
+            :Random,
+            :UUIDs,
+            :Future,
+            :Pkg,
+            :LinearAlgebra,
+            :IterativeEigensolvers,
+            :SparseArrays,
+            :SuiteSparse,
+            :SharedArrays,
+            :Distributed,
+            :Test,
+            :REPL,
         ]
 
     maxlen = maximum(textwidth.(string.(stdlibs)))
