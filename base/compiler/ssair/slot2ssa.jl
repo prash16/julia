@@ -256,16 +256,13 @@ function idf(cfg::CFG, defuse, domtree::DomTree, slot::Int)
     phiblocks
 end
 
-macro id(x); esc(x); end
-
-function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
+function construct_ssa!(ci::CodeInfo, ir::IRCode, domtree::DomTree, defuse, nargs::Int)
+    cfg = ir.cfg
     left = Int[]
-    defuse_blocks = lift_defuse(cfg, defuse)
-    phi_slots = Vector{Int}[Vector{Int}() for _ = 1:length(cfg.blocks)]
+    defuse_blocks = lift_defuse(ir.cfg, defuse)
+    phi_slots = Vector{Int}[Vector{Int}() for _ = 1:length(ir.cfg.blocks)]
     phi_nodes = Vector{Pair{Int,PhiNode}}[Vector{Pair{Int,PhiNode}}() for _ = 1:length(cfg.blocks)]
     phi_ssas = SSAValue[]
-    code = Any[nothing for _ = 1:length(ci.code)]
-    ir = IRCode(code, cfg, ci.slottypes[1:(nargs+1)], mod)
     for (idx, slot) in Iterators.enumerate(defuse)
         # No uses => no need for phi nodes
         isempty(slot.uses) && continue
@@ -374,8 +371,9 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
         end
     end
     # Convert into IRCode form
+    code = ir.stmts
     ssavalmap = Any[SSAValue(-1) for _ in 1:(length(ci.ssavaluetypes)+1)]
-    types = Any[Any for _ = 1:(length(code)+length(ir.new_nodes))]
+    types = Any[Any for _ in 1:(length(code) + length(ir.new_nodes))]
     # Detect statement positions for assignments and construct array
     for (idx, stmt) in Iterators.enumerate(ci.code)
         if isexpr(stmt, :(=)) && isa(stmt.args[1], SSAValue)
@@ -427,15 +425,14 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
         end
     end
     types = Any[isa(types[i], DelayedTyp) ? ir.new_nodes[types[i].phi.id - length(ir.stmts)][2] : types[i] for i in 1:length(types)]
-    new_nodes = Tuple{Int, Any, Any}[let
-            (pos, typ, node) = ir.new_nodes[i]
-            typ = isa(typ, DelayedTyp) ? ir.new_nodes[typ.phi.id - length(ir.stmts)][2] : typ;
+    new_nodes = Tuple{Int, Any, Any}[let (pos, typ, node) = ir.new_nodes[i]
+            typ = isa(typ, DelayedTyp) ? ir.new_nodes[typ.phi.id - length(ir.stmts)][2] : typ
             (pos, typ, node)
         end for i in 1:length(ir.new_nodes)]
     # Renumber SSA values
     code = Any[new_to_regular(renumber_ssa!(code[i], ssavalmap)) for i in 1:length(code)]
-    new_nodes = Tuple{Int, Any, Any}[let (pt,typ,stmt) = new_nodes[i]
-        (pt, typ, new_to_regular(renumber_ssa!(stmt, ssavalmap)))
-    end for i in 1:length(new_nodes)]
-    IRCode(code, types, ci.slottypes[1:(nargs+1)], cfg, new_nodes, mod)
+    new_nodes = Tuple{Int, Any, Any}[let (pt, typ, stmt) = new_nodes[i]
+            (pt, typ, new_to_regular(renumber_ssa!(stmt, ssavalmap)))
+        end for i in 1:length(new_nodes)]
+    return IRCode(ir, code, types, ir.cfg, new_nodes)
 end

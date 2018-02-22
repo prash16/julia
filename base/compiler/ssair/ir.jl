@@ -126,8 +126,13 @@ struct IRCode
     cfg::CFG
     new_nodes::Vector{Tuple{Int, Any, Any}}
     mod::Module
+    meta::Vector{Any}
+
+    IRCode(stmts::Vector{Any}, cfg::CFG, argtypes::Vector{Any}, mod::Module, meta::Vector{Any}) =
+        new(stmts, Any[], argtypes, cfg, Tuple{Int, Any, Any}[], mod, meta)
+    IRCode(ir::IRCode, stmts::Vector{Any}, types::Vector{Any}, cfg::CFG, new_nodes::Vector{Tuple{Int, Any, Any}}) =
+        new(stmts, types, ir.argtypes, cfg, new_nodes, ir.mod, ir.meta)
 end
-IRCode(stmts, cfg, argtypes, mod) = IRCode(stmts, Any[], argtypes, cfg, Tuple{Int, Any, Any}[], mod)
 
 function getindex(x::IRCode, s::SSAValue)
     if s.id <= length(x.stmts)
@@ -308,20 +313,19 @@ mutable struct IncrementalCompact
     ssa_rename::Vector{Any}
     used_ssas::Vector{Int}
     late_fixup::Vector{Int}
-    keep_meta::Bool
     # This could be Stateful, but bootstrapping doesn't like that
     perm::Vector{Int}
     new_nodes_idx::Int
     idx::Int
     result_idx::Int
-    function IncrementalCompact(code::IRCode; keep_meta = false)
+    function IncrementalCompact(code::IRCode)
         perm = my_sortperm(Int[code.new_nodes[i][1] for i in 1:length(code.new_nodes)])
         result = Array{Any}(uninitialized, length(code.stmts) + length(code.new_nodes))
         result_types = Array{Any}(uninitialized, length(code.stmts) + length(code.new_nodes))
         ssa_rename = Any[SSAValue(i) for i = 1:(length(code.stmts) + length(code.new_nodes))]
         late_fixup = Vector{Int}()
-        used_ssas = Int[0 for _ in 1:(length(code.stmts) + length(code.new_nodes))]
-        new(code, result, result_types, ssa_rename, used_ssas, late_fixup, keep_meta, perm, 1, 1, 1)
+        used_ssas = fill(0, length(code.stmts) + length(code.new_nodes))
+        return new(code, result, result_types, ssa_rename, used_ssas, late_fixup, perm, 1, 1, 1)
     end
 end
 
@@ -386,12 +390,10 @@ end
 
 function process_node!(result::Vector{Any}, result_idx::Int, ssa_rename::Vector{Any},
         late_fixup::Vector{Int}, used_ssas::Vector{Int}, @nospecialize(stmt),
-        idx::Int, processed_idx::Int, keep_meta::Bool)
+        idx::Int, processed_idx::Int)
     ssa_rename[idx] = SSAValue(result_idx)
     if stmt === nothing
         ssa_rename[idx] = stmt
-    elseif !keep_meta && (isexpr(stmt, :meta) || isa(stmt, LineNumberNode))
-        # eliminate this node
     elseif isa(stmt, GotoNode)
         result[result_idx] = stmt
         result_idx += 1
@@ -428,8 +430,8 @@ function process_node!(result::Vector{Any}, result_idx::Int, ssa_rename::Vector{
     return result_idx
 end
 function process_node!(compact::IncrementalCompact, result_idx::Int, @nospecialize(stmt), idx::Int, processed_idx::Int)
-    process_node!(compact.result, result_idx, compact.ssa_rename,
-        compact.late_fixup, compact.used_ssas, stmt, idx, processed_idx, compact.keep_meta)
+    return process_node!(compact.result, result_idx, compact.ssa_rename,
+        compact.late_fixup, compact.used_ssas, stmt, idx, processed_idx)
 end
 
 function next(compact::IncrementalCompact, (idx, active_bb, old_result_idx)::Tuple{Int, Int, Int})
@@ -499,8 +501,7 @@ end
 
 function finish(compact::IncrementalCompact)
     for idx in compact.late_fixup
-        stmt = compact.result[idx]
-        @assert isa(stmt, PhiNode)
+        stmt = compact.result[idx]::PhiNode
         values = Vector{Any}(uninitialized, length(stmt.values))
         for i = 1:length(stmt.values)
             isassigned(stmt.values, i) || continue
@@ -533,7 +534,7 @@ function finish(compact::IncrementalCompact)
         maybe_erase_unused!(extra_worklist, compact, pop!(extra_worklist))
     end
     cfg = CFG(compact.ir.cfg.blocks, Int[first(bb.stmts) for bb in compact.ir.cfg.blocks[2:end]])
-    IRCode(compact.result, compact.result_types, compact.ir.argtypes, cfg, Tuple{Int, Any, Any}[], compact.ir.mod)
+    return IRCode(compact.ir, compact.result, compact.result_types, cfg, Tuple{Int, Any, Any}[])
 end
 
 function compact!(code::IRCode)

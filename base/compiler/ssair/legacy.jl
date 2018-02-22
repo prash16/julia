@@ -10,7 +10,7 @@ function ssaargmap(f, @nospecialize(stmt))
     urs[]
 end
 
-function replace_code!(ci::CodeInfo, code::IRCode, nargs)
+function replace_code!(ci::CodeInfo, code::IRCode, nargs::Int)
     cfg = compute_basic_blocks(code.stmts)
     if !isempty(code.new_nodes)
         code = compact!(code)
@@ -49,18 +49,22 @@ function replace_code!(ci::CodeInfo, code::IRCode, nargs)
     block_start = IdDict{Int, Int}(first(code.cfg.blocks[x].stmts)=>x for x in dest_blocks)
     comefrom_labels = IdSet{Int}(last(code.cfg.blocks[x].stmts)+1 for x in jump_origins)
     block_terminators = IdDict{Int, Int}(last(block.stmts)=>i for (i,block) in pairs(code.cfg.blocks))
-    function rename(val)
-        if isa(val, SSAValue)
-            if haskey(mapping, val.id)
-                return SSAValue(mapping[val.id])
+    local rename
+    let mapping = mapping
+        function rename(@nospecialize(val))
+            if isa(val, SSAValue)
+                if haskey(mapping, val.id)
+                    return SSAValue(mapping[val.id])
+                end
+            elseif isa(val, Argument)
+                return SlotNumber(val.n)
             end
-        elseif isa(val, Argument)
-            return SlotNumber(val.n)
+            return val
         end
-        return val
     end
     # Now translate the code
     new_code = Vector{Any}()
+    append!(new_code, code.meta)
     label_mapping = IdDict{Int, Int}()
     terminator_mapping = IdDict{Int, Int}()
     fixup = Int[]
