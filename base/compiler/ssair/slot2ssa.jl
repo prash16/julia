@@ -118,7 +118,7 @@ function fixup_slot!(ir::IRCode, ci::CodeInfo, idx::Int, slot::Int, @nospecializ
     end
 end
 
-function fixemup!(cond, rename, ir::IRCode, ci::CodeInfo, idx, @nospecialize(stmt))
+function fixemup!(cond, rename, ir::IRCode, ci::CodeInfo, idx::Int, @nospecialize(stmt))
     if isa(stmt, Union{SlotNumber, TypedSlot}) && cond(stmt)
         return fixup_slot!(ir, ci, idx, slot_id(stmt), stmt, rename(stmt))
     end
@@ -173,7 +173,7 @@ function fixemup!(cond, rename, ir::IRCode, ci::CodeInfo, idx, @nospecialize(stm
     urs[]
 end
 
-function fixup_uses!(ir::IRCode, ci::CodeInfo, uses, slot, @nospecialize(ssa))
+function fixup_uses!(ir::IRCode, ci::CodeInfo, uses::Vector{Int}, slot, @nospecialize(ssa))
     for use in uses
         ci.code[use] = fixemup!(stmt->slot_id(stmt)==slot, stmt->ssa, ir, ci, use, ci.code[use])
     end
@@ -350,7 +350,12 @@ function construct_ssa!(ci::CodeInfo, ir::IRCode, domtree::DomTree, defuse, narg
                 incoming_vals[slot_id(stmt.slot)] = undef_token
                 ci.code[idx] = nothing
             else
-                ci.code[idx] = rename_uses!(ir, ci, idx, stmt, incoming_vals)
+                stmt = rename_uses!(ir, ci, idx, stmt, incoming_vals)
+                if stmt === nothing && idx == last(cfg.blocks[item].stmts)
+                    # preserve the CFG
+                    stmt = ReturnNode{Any}()
+                end
+                ci.code[idx] = stmt
                 # Record a store
                 if isexpr(stmt, :(=)) && isa(stmt.args[1], SlotNumber)
                     id = slot_id(stmt.args[1])
