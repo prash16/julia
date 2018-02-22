@@ -206,13 +206,16 @@ struct DelayedTyp
     phi::NewSSAValue
 end
 
-function typ_for_val(@nospecialize(val), ir::IRCode, ci::CodeInfo)
+# maybe use expr_type?
+function typ_for_val(@nospecialize(val), ci::CodeInfo)
     isa(val, Expr) && return val.typ
-    isa(val, GlobalRef) && return typeof(getfield(val.mod, val.name))
+    isa(val, GlobalRef) && return abstract_eval_global(val.mod, val.name)
     isa(val, SSAValue) && return ci.ssavaluetypes[val.id+1]
     isa(val, Argument) && return ci.slottypes[val.n]
     isa(val, NewSSAValue) && return DelayedTyp(val)
-    return typeof(val)
+    isa(val, QuoteNode) && return Const(val.value)
+    isa(val, Union{Symbol, PiNode, PhiNode, SlotNumber, TypedSlot}) && error("unexpected val type")
+    return Const(val)
 end
 
 # Run iterated dominance frontier
@@ -281,7 +284,7 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
                 fixup_uses!(ir, ci, slot.uses, idx, nothing)
             else
                 val = ci.code[slot.defs[]].args[2]
-                typ = typ_for_val(val, ir, ci)
+                typ = typ_for_val(val, ci)
                 ssaval = SSAValue(make_ssa!(ci, slot.defs[], idx, typ))
                 fixup_uses!(ir, ci, slot.uses, idx, ssaval)
             end
@@ -332,7 +335,7 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
             if isa(incoming_val, NewSSAValue)
                 push!(type_refine_phi, ssaval)
             end
-            typ = incoming_val == undef_token ? MaybeUndef(Union{}) : typ_for_val(incoming_val, ir, ci)
+            typ = incoming_val == undef_token ? MaybeUndef(Union{}) : typ_for_val(incoming_val, ci)
             new_node_id = ssaval - length(ir.stmts)
             old_insert, old_typ, _ = ir.new_nodes[new_node_id]
             if isa(typ, DelayedTyp)
@@ -355,7 +358,7 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
                 if isexpr(stmt, :(=)) && isa(stmt.args[1], SlotNumber)
                     id = slot_id(stmt.args[1])
                     val = stmt.args[2]
-                    typ = typ_for_val(val, ir, ci)
+                    typ = typ_for_val(val, ci)
                     incoming_vals[id] = SSAValue(make_ssa!(ci, idx, id, typ))
                 end
             end
@@ -411,7 +414,7 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
                     end
                     continue
                 end
-                typ = typ_for_val(node.values[i], ir, ci)
+                typ = typ_for_val(node.values[i], ci)
                 if isa(typ, DelayedTyp)
                     typ = ir.new_nodes[typ.phi.id - length(ir.stmts)][2]
                 end
