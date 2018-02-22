@@ -388,7 +388,7 @@ struct jl_cgval_t {
     // For unions, we may need to keep a reference to the boxed part individually.
     // If this is non-NULL, then, at runtime, we satisfy the invariant that (for the corresponding
     // runtime values) if `(TIndex | 0x80) != 0`, then `Vboxed == V` (by value).
-    // For conenience, we also set this value of isboxed values, in which case
+    // For convenience, we also set this value of isboxed values, in which case
     // it is equal (at compile time) to V.
     Value *Vboxed;
     Value *TIndex; // if `V` is an unboxed (tagged) Union described by `typ`, this gives the DataType index (1-based, small int) as an i8
@@ -3658,7 +3658,7 @@ static void emit_assignment(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
             tindex = compute_tindex_unboxed(ctx, rval_info, vi.value.typ);
             if (vi.boxroot)
                 tindex = ctx.builder.CreateOr(tindex, ConstantInt::get(T_int8, 0x80));
-            if (!vi.boxroot)
+            else
                 rval_info.TIndex = tindex;
         }
         ctx.builder.CreateStore(tindex, vi.pTIndex, vi.isVolatile);
@@ -5975,6 +5975,8 @@ static std::unique_ptr<Module> emit_function(
             else {
                 val = emit_expr(ctx, value);
             }
+            if (val.constant)
+                val = mark_julia_const(val.constant); // be over-conservative at making sure `.typ` is set concretely, not tindex
             TerminatorInst *terminator = FromBB->getTerminator();
             if (!isa<BranchInst>(terminator) || cast<BranchInst>(terminator)->isConditional()) {
                 bool found = false;
@@ -6025,7 +6027,7 @@ static std::unique_ptr<Module> emit_function(
                     V = UndefValue::get(VN->getType());
                     RTindex = UndefValue::get(T_int8);
                 }
-                else if (jl_is_concrete_type(val.typ)) {
+                else if (jl_is_concrete_type(val.typ) || val.constant) {
                     size_t tindex = get_box_tindex((jl_datatype_t*)val.typ, phiType);
                     if (tindex == 0) {
                         V = boxed(ctx, val);
@@ -6033,30 +6035,27 @@ static std::unique_ptr<Module> emit_function(
                     }
                     else {
                         V = ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
-                        if (PhiAlloca && !type_is_ghost(julia_type_to_llvm(val.typ)))
-                            emit_unionmove(ctx, PhiAlloca, val, NULL, false, NULL);
+                        Type *lty = julia_type_to_llvm(val.typ);
+                        if (PhiAlloca && !type_is_ghost(lty)) // basically, if !ghost union
+                            emit_unbox(ctx, lty, val, val.typ, PhiAlloca);
                         RTindex = ConstantInt::get(T_int8, tindex);
                     }
                 }
                 else {
                     jl_cgval_t new_union = convert_julia_type(ctx, val, phiType);
-                    if (!new_union.TIndex) {
-                        V = new_union.Vboxed;
-                        if (TindexN) {
-                            if (PhiAlloca) // basically, if !ghost union
-                                emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
-                            RTindex = compute_tindex_unboxed(ctx, new_union, phiType);
-                            RTindex = ctx.builder.CreateOr(RTindex, ConstantInt::get(T_int8, 0x80));
-                        }
-                        else if (!V) {
-                            V = boxed(ctx, val);
-                        }
+                    RTindex = new_union.TIndex;
+                    if (!RTindex) {
+                        assert(new_union.isboxed && new_union.Vboxed && "convert_julia_type failed");
+                        RTindex = compute_tindex_unboxed(ctx, new_union, phiType);
+                        RTindex = ctx.builder.CreateOr(RTindex, ConstantInt::get(T_int8, 0x80));
+                        new_union.TIndex = RTindex;
                     }
-                    else {
-                        if (PhiAlloca) // basically, if !ghost union
-                            emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
-                        V = new_union.Vboxed ? new_union.Vboxed : ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
-                        RTindex = new_union.TIndex;
+                    V = new_union.Vboxed ? new_union.Vboxed : ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
+                    if (PhiAlloca) { // basically, if !ghost union
+                        Value *notunion = NULL;
+                        if (new_union.Vboxed != nullptr)
+                            notunion = ctx.builder.CreateICmpEQ(RTindex, ConstantInt::get(T_int8, 0x80));
+                        emit_unionmove(ctx, PhiAlloca, new_union, notunion, false, NULL);
                     }
                 }
                 if (VN)
