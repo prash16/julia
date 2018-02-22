@@ -394,11 +394,10 @@ function process_node!(result::Vector{Any}, result_idx::Int, ssa_rename::Vector{
     ssa_rename[idx] = SSAValue(result_idx)
     if stmt === nothing
         ssa_rename[idx] = stmt
-    elseif isa(stmt, GotoNode)
+    elseif isa(stmt, GotoNode) || isa(stmt, GlobalRef)
         result[result_idx] = stmt
         result_idx += 1
-    elseif isexpr(stmt, :call) || isexpr(stmt, :invoke) || isa(stmt, ReturnNode) || isexpr(stmt, :gc_preserve_begin) ||
-           isexpr(stmt, :gc_preserve_end) || isexpr(stmt, :foreigncall)
+    elseif isa(stmt, Expr) || isa(stmt, PiNode) || isa(stmt, GotoIfNot) || isa(stmt, ReturnNode)
         result[result_idx] = renumber_ssa!(stmt, ssa_rename, true, used_ssas)
         result_idx += 1
     elseif isa(stmt, PhiNode)
@@ -418,14 +417,13 @@ function process_node!(result::Vector{Any}, result_idx::Int, ssa_rename::Vector{
         end
         result[result_idx] = PhiNode(stmt.edges, values)
         result_idx += 1
-    elseif isa(stmt, SSAValue) || (!isa(stmt, Expr) && !isa(stmt, PhiNode) && !isa(stmt, PiNode) && !isa(stmt, GotoIfNot))
-        # Constant or identity assign, replace uses of this
-        # ssa value with its result
-        stmt = isa(stmt, SSAValue) ? ssa_rename[stmt.id] : stmt
+    elseif isa(stmt, SSAValue)
+        # identity assign, replace uses of this ssa value with its result
+        stmt = ssa_rename[stmt.id]
         ssa_rename[idx] = stmt
     else
-        result[result_idx] = renumber_ssa!(stmt, ssa_rename, true, used_ssas)
-        result_idx += 1
+        # Constant assign, replace uses of this ssa value with its result
+        ssa_rename[idx] = stmt
     end
     return result_idx
 end

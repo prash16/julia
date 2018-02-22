@@ -20,10 +20,11 @@ function predicate_insertion_pass!(ir::IRCode, domtree)
         if !isa(val, SSAValue)
             (cmp, val) = (val, cmp)
         end
+        # TODO: use exprtype
         isa(val, SSAValue) || continue
         isa(cmp, SSAValue) && continue
         if isa(cmp, GlobalRef)
-            cmp = getfield(cmp.mod, cmp.name)
+            cmp = getfield(cmp.mod, cmp.name) # FIXME!
         end
         isdefined(typeof(cmp), :instance) || continue
         true_type = typeof(cmp)
@@ -128,6 +129,7 @@ function getfield_elim_pass!(ir::IRCode)
     ir
 end
 
+# TODO: use exprtype
 function get_val_if_type_cmp(def, ir)
     isa(def, Expr) || return nothing
     is_known_call(def, (===), ir, ir.mod) || return nothing
@@ -138,7 +140,7 @@ function get_val_if_type_cmp(def, ir)
     isa(val, SSAValue) || return nothing
     isa(cmp, SSAValue) && return nothing
     if isa(cmp, GlobalRef)
-        cmp = getfield(cmp.mod, cmp.name)
+        cmp = getfield(cmp.mod, cmp.name) # FIXME!
     end
     isdefined(typeof(cmp), :instance) || return nothing
     return (val, cmp)
@@ -149,21 +151,14 @@ function type_lift_pass!(ir::IRCode)
     has_non_type_ctx_uses = IdSet{Int}()
     lifted_undef = IdDict{Int, SSAValue}()
     for (idx, stmt) in pairs(ir.stmts)
-        if isexpr(stmt, :isdefined) || isexpr(stmt, :undefcheck)
-            val = isexpr(stmt, :isdefined) ? stmt.args[1] : stmt.args[2]
+        if stmt isa Expr && (stmt.head === :isdefined || stmt.head === :undefcheck)
+            val = (stmt.head === :isdefined) ? stmt.args[1] : stmt.args[2]
             # undef can only show up by being introduced in a phi
             # node, so lift all phi nodes that have maybe undef values
             processed = IdDict{Int, SSAValue}()
             if !isa(val, SSAValue)
-                if isexpr(stmt, :isdefined)
-                    if isexpr(stmt.args[1], :static_parameter)
-                        continue
-                    end
-                end
-                ccall(:jl_, Cvoid, (Any,), val)
-                if isexpr(stmt, :isdefined)
-                    ir.stmts[idx] = true
-                else
+                if stmt.head === :undefcheck
+                    ccall(:jl_, Cvoid, (Any,), val)
                     ir.stmts[idx] = nothing
                 end
                 continue
@@ -175,7 +170,7 @@ function type_lift_pass!(ir::IRCode)
             end
             def = ir.stmts[stmt_id]
             if !isa(def, PhiNode)
-                if isexpr(stmt, :isdefined)
+                if stmt.head === :isdefined
                     ir.stmts[idx] = true
                 else
                     ir.stmts[idx] = nothing
@@ -231,7 +226,7 @@ function type_lift_pass!(ir::IRCode)
                 end
             end
             ccall(:jl_, Cvoid, (Any,), lifted_undef[stmt_id])
-            if isexpr(stmt, :isdefined)
+            if stmt.head === :isdefined
                 ir.stmts[idx] = lifted_undef[stmt_id]
             else
                 ir.stmts[idx] = Expr(:throw_undef_if_not, stmt.args[1], lifted_undef[stmt_id])
