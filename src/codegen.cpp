@@ -5946,7 +5946,8 @@ static std::unique_ptr<Module> emit_function(
             if (!value || jl_is_ssavalue(value)) {
                 ssize_t idx = value ? ((jl_ssavalue_t*)value)->id : 0;
                 if (!value || !ctx.ssavalue_assigned.at(idx)) {
-                    if (VN) {
+                    Value *RTindex = TindexN ? UndefValue::get(T_int8) : NULL;
+                     if (VN) { // otherwise, it's all-unboxed
                         Value *undef;
                         if (isa<PointerType>(VN->getType())) {
                             bool isboxed;
@@ -5957,8 +5958,10 @@ static std::unique_ptr<Module> emit_function(
                                 undef = decay_derived(emit_static_alloca(ctx, lphity));
                             }
                             else {
-                                // but make sure gc pointers are NULL
+                                // but make sure gc pointers (including ptr_phi of union-split) are NULL
                                 undef = ConstantPointerNull::get(cast<PointerType>(VN->getType()));
+                                if (TindexN) // let the runtime / optimizer know this is unknown / boxed / null, so that it won't try to union_move / copy it later
+                                    RTindex = ConstantInt::get(T_int8, 0x80);
                             }
                         }
                         else {
@@ -5967,7 +5970,7 @@ static std::unique_ptr<Module> emit_function(
                         VN->addIncoming(undef, FromBB);
                     }
                     if (TindexN)
-                        TindexN->addIncoming(UndefValue::get(T_int8), FromBB);
+                        TindexN->addIncoming(RTindex, FromBB);
                     continue;
                 }
                 val = ctx.SAvalues.at(idx);
@@ -6052,10 +6055,12 @@ static std::unique_ptr<Module> emit_function(
                     }
                     V = new_union.Vboxed ? new_union.Vboxed : ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
                     if (PhiAlloca) { // basically, if !ghost union
-                        Value *notunion = NULL;
+                        Value *skip = NULL;
                         if (new_union.Vboxed != nullptr)
-                            notunion = ctx.builder.CreateICmpEQ(RTindex, ConstantInt::get(T_int8, 0x80));
-                        emit_unionmove(ctx, PhiAlloca, new_union, notunion, false, NULL);
+                            skip = ctx.builder.CreateICmpNE( // if 0x80 is set, we won't select this slot anyways
+                                    ctx.builder.CreateAnd(RTindex, ConstantInt::get(T_int8, 0x80)),
+                                    ConstantInt::get(T_int8, 0));
+                        emit_unionmove(ctx, PhiAlloca, new_union, skip, false, NULL);
                     }
                 }
                 if (VN)
