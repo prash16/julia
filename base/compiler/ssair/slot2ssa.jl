@@ -379,7 +379,7 @@ function construct_ssa!(ci::CodeInfo, ir::IRCode, domtree::DomTree, defuse, narg
     # Convert into IRCode form
     code = ir.stmts
     ssavalmap = Any[SSAValue(-1) for _ in 1:(length(ci.ssavaluetypes)+1)]
-    types = Any[Any for _ in 1:(length(code) + length(ir.new_nodes))]
+    types = Any[Any for _ in 1:length(code)]
     # Detect statement positions for assignments and construct array
     for (idx, stmt) in Iterators.enumerate(ci.code)
         if isexpr(stmt, :(=)) && isa(stmt.args[1], SSAValue)

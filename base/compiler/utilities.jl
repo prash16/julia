@@ -246,20 +246,21 @@ end
 ##############
 
 # scan body for the value of the largest referenced label
-function label_counter(body::Vector{Any})
+# so that we won't accidentally re-use it
+function label_counter(body::Vector{Any}, comefrom=true)
     l = 0
     for b in body
         label = 0
-        if isa(b, GotoNode)
+        if isa(b, LabelNode) && comefrom
             label = b.label::Int
-        elseif isa(b, LabelNode)
-            label = b.label
+        elseif isa(b, GotoNode)
+            label = b.label::Int
         elseif isa(b, Expr)
             if b.head == :gotoifnot
                 label = b.args[2]::Int
             elseif b.head == :enter
                 label = b.args[1]::Int
-            elseif b.head === :(=)
+            elseif b.head === :(=) && comefrom
                 rhs = b.args[2]
                 if isa(rhs, PhiNode)
                     for edge in rhs.edges
@@ -284,6 +285,7 @@ function get_label_map(body::Vector{Any})
     for i = 1:length(body)
         el = body[i]
         if isa(el, LabelNode)
+            # @assert labelmap[el.label] == 0
             labelmap[el.label] = i
         end
     end

@@ -23,7 +23,7 @@ mutable struct OptimizationState
             s_edges = []
             frame.stmt_edges[1] = s_edges
         end
-        next_label = label_counter(frame.src.code) + 1
+        next_label = max(label_counter(frame.src.code), length(frame.src.code)) + 10
         return new(frame.linfo, frame.vararg_type_container,
                    s_edges::Vector{Any},
                    frame.src, frame.mod, frame.nargs,
@@ -53,7 +53,7 @@ mutable struct OptimizationState
             inmodule = linfo.def::Module
             nargs = 0
         end
-        next_label = label_counter(src.code) + 1
+        next_label = max(label_counter(frame.src.code), length(frame.src.code)) + 10
         vararg_type_container = nothing # if you want something more accurate, set it yourself :P
         return new(linfo, vararg_type_container,
                    s_edges::Vector{Any},
@@ -296,6 +296,8 @@ function optimize(me::InferenceState)
             end
             ir = run_passes(opt.src, opt.mod, nargs, topline)
             replace_code!(opt.src, ir, nargs, topline)
+            push!(opt.src.code, LabelNode(length(opt.src.code) + 1))
+            any_phi = true
             #comp = ccall(:jl_compress_ast, Any, (Any, Any), def, opt.src)
             #Core.println(def.roots)
             #ccall(:jl_, Cvoid, (Any,), comp)
@@ -321,8 +323,8 @@ function optimize(me::InferenceState)
             meta_elim_pass!(code, coverage_enabled())
             filter!(x -> x !== nothing, code)
             force_noinline = peekmeta(code, :noinline)[1]
+            reindex_labels!(opt)
         end
-        reindex_labels!(opt)
         me.min_valid = opt.min_valid
         me.max_valid = opt.max_valid
     end
@@ -596,6 +598,7 @@ function type_annotate!(sv::InferenceState)
     undefs = fill(false, nslots)
     body = src.code::Array{Any,1}
     nexpr = length(body)
+    push!(body, LabelNode(nexpr + 1)) # add a terminal label for tracking phi
     i = 1
     while i <= nexpr
         st_i = states[i]
@@ -1457,16 +1460,19 @@ function inlineable(@nospecialize(f), @nospecialize(ft), e::Expr, atypes::Vector
 
     # make labels / goto statements unique
     # relocate inlining information
-    newlabels = zeros(Int, label_counter(body.args))
-    for i = 1:length(body.args)
+    body_len = length(body.args)
+    newlabels = zeros(Int, body_len + 1)
+    for i = 1:body_len
         a = body.args[i]
         if isa(a, LabelNode)
+            @assert a.label == i
             newlabel = genlabel(sv)
             newlabels[a.label] = newlabel.label
             body.args[i] = newlabel
         end
     end
-    for i = 1:length(body.args)
+    local end_label # if it ends in a goto, we might need to add a come-from label
+    for i = 1:body_len
         a = body.args[i]
         if isa(a, GotoNode)
             body.args[i] = GotoNode(newlabels[a.label])
@@ -1476,7 +1482,17 @@ function inlineable(@nospecialize(f), @nospecialize(ft), e::Expr, atypes::Vector
             elseif a.head === :gotoifnot
                 a.args[2] = newlabels[a.args[2]::Int]
             elseif a.head === :(=) && isa(a.args[2], PhiNode)
-                edges = Any[newlabels[edge+1]-1 for edge in a.args[2].edges]
+                edges = a.args[2].edges
+                if !@isdefined end_label
+                    for edge in edges
+                        if edge == body_len
+                            end_label = genlabel(sv)
+                            newlabels[body_len + 1] = end_label.label
+                            break
+                        end
+                    end
+                end
+                edges = Any[newlabels[edge::Int + 1] - 1 for edge in edges]
                 a.args[2] = PhiNode(edges, a.args[2].values)
             end
         end
@@ -1487,7 +1503,14 @@ function inlineable(@nospecialize(f), @nospecialize(ft), e::Expr, atypes::Vector
     local retval
     multiret = false
     lastexpr = pop!(body.args)
-    if isa(lastexpr, LabelNode)
+    if @isdefined end_label
+        # clearly lastexpr must have been a come-from node (specifically, goto),
+        # so just need to push an empty basic-block here for the label numbering
+        # (later, we'll also push retstmt as the next statement)
+        push!(body.args, lastexpr)
+        push!(body.args, end_label)
+        lastexpr = nothing
+    elseif isa(lastexpr, LabelNode)
         push!(body.args, lastexpr)
         error_call = Expr(:call, GlobalRef(topmod, :error), "fatal error in type inference (lowering)")
         error_call.typ = Union{}
@@ -4175,10 +4198,17 @@ function reindex_labels!(sv::OptimizationState)
                 el.args[1] = labelnum
             elseif el.head === :(=)
                 if isa(el.args[2], PhiNode)
-                    edges = Any[mapping[edge+1]-1 for edge in el.args[2].edges]
+                    edges = Any[mapping[edge::Int + 1] - 1 for edge in el.args[2].edges]
                     el.args[2] = PhiNode(convert(Vector{Any}, edges), el.args[2].values)
                 end
             end
+        end
+    end
+    if body[end] isa LabelNode
+        # we usually have a trailing label for the purposes of phi numbering
+        # this can now be deleted also if unused
+        if label_counter(body, false) < length(body)
+            pop!(body)
         end
     end
 end
