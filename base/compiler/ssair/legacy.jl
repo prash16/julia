@@ -116,27 +116,28 @@ function replace_code!(ci::CodeInfo, code::IRCode, nargs::Int, topline::LineNumb
     end
     for i in fixup
         val = new_code[i]
-        if isexpr(val, :(=))
+        isassign = isexpr(val, :(=))
+        if isassign
             val = val.args[2]
         end
-        val = if isa(val, PhiNode)
+        if isa(val, PhiNode)
             # Translate from BB edges to statement edges
             edges = Any[terminator_mapping[edge] for edge in val.edges]
-            PhiNode(convert(Vector{Any}, edges), val.values)
+            val = PhiNode(convert(Vector{Any}, edges), val.values)
         elseif isa(val, GotoNode)
-            GotoNode(label_mapping[val.label])
+            val = GotoNode(label_mapping[val.label])
         elseif isexpr(val, :gotoifnot)
-            Expr(:gotoifnot, val.args[1], label_mapping[val.args[2]])
+            val = Expr(:gotoifnot, val.args[1], label_mapping[val.args[2]])
         else
             #@show val
             error()
         end
-        if isexpr(new_code[i], :(=))
+        if isassign
             new_code[i].args[2] = val
         else
             new_code[i] = val
         end
     end
     ci.code = new_code
-    ci
+    return ci
 end
